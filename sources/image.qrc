@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="image">
+    <file>images/main_background.jpeg</file>
+    <file>images/main_background.jpg</file>
+    <file>images/文心一言AI作图_20250312092512.png</file>
+  </qresource>
+</RCC>
