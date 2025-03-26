@@ -1,14 +1,18 @@
 import sys
 import numpy as np
 import tensorflow as tf
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
+from PyQt5.QtCore import Qt, QEvent
+from PyQt5.QtGui import QCursor
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QVBoxLayout
 from PyQt5 import QtCore, QtGui
+from PyQt5.QtCore import Qt  # 核心模块
 from tensorflow.keras.models import load_model
 import Login
 import Home
 import data_collection
 import DataPreprocessing_CNN_LSTM
 import user_management
+import response
 
 
 class UI_main_1(QMainWindow):
@@ -92,12 +96,24 @@ class UI_main_1(QMainWindow):
 class UI_main_2(QMainWindow):
     def __init__(self):
         super().__init__()
+        # 设置无边框窗口（关键代码）
+        self.setWindowFlags(Qt.FramelessWindowHint)  # 无边框
+        self.setAttribute(Qt.WA_TranslucentBackground)  # 透明背景
+
+
         self.ui = Home.Ui_MainWindow()
         self.ui.setupUi(self)
-        self.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.show_home_page()
 
+        # 窗口控制参数
+        self.drag_pos = None
+        self.resize_edge = None
+        self.border_width = 10  # 边框检测宽度
+        self.title_height = 70  # 标题栏高度
+
+        # 事件过滤器（关键！）
+        self.ui.widget_Home.installEventFilter(self)
+        self.ui.widget_Home.setMouseTracking(True)
+        self.show_home_page()
 
         self.ui.pushButton_mininum.clicked.connect(self.mini)
         self.ui.pushButton_maximum.clicked.connect(self.max)
@@ -109,6 +125,8 @@ class UI_main_2(QMainWindow):
         self.ui.pushButton_InputData.clicked.connect(self.import_csv)
         self.ui.pushButton_loadModel.clicked.connect(self.Load_Model)
         self.ui.pushButton_StartPredict.clicked.connect(self.Run_Detection)
+        self.ui.pushButton_MAR_Start.clicked.connect(self.on_start_clicked)
+        self.ui.comboBox_Method.currentIndexChanged.connect(self.on_response_method_changed)
 
         self.show()
         self.m_flag = False
@@ -123,6 +141,12 @@ class UI_main_2(QMainWindow):
         self.ui.pushButton_loadModel.hide()
         self.ui.pushButton_StartPredict.hide()
         self.ui.textEdit_Log.hide()
+        self.ui.pushButton_MAR_Start.hide()
+        self.ui.pushButton_MAR_End.hide()
+        self.ui.textEdit_EmailAddress.hide()
+        self.ui.label_Email.hide()
+        self.ui.label_Method.hide()
+        self.ui.comboBox_Method.hide()
 
     def exit(self):
         self.close()
@@ -131,29 +155,87 @@ class UI_main_2(QMainWindow):
         self.showMinimized()
 
     def max(self):
+        """切换最大化状态"""
         if self.isMaximized():
             self.showNormal()
+            self.ui.pushButton_maximum.setText("❐")
         else:
             self.showMaximized()
+            self.ui.pushButton_maximum.setText("🗗")
 
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton and not self.isMaximized():
-            self.m_flag = True
-            self.m_Position = event.globalPos() - self.pos()
-            event.accept()
-            self.setCursor(QtGui.QCursor(QtCore.Qt.OpenHandCursor))
+    def eventFilter(self, obj, event):
+        """事件过滤器解决子组件拦截问题"""
+        if obj == self.ui.widget_Home:
+            if event.type() == QEvent.MouseButtonPress:
+                self.handle_mouse_press(event)
+            elif event.type() == QEvent.MouseMove:
+                self.handle_mouse_move(event)
+            elif event.type() == QEvent.MouseButtonRelease:
+                self.drag_pos = None
+                self.resize_edge = None
+                self.setCursor(Qt.ArrowCursor)
+        return super().eventFilter(obj, event)
 
-    def mouseMoveEvent(self, mouse_event):
-        if QtCore.Qt.LeftButton and self.m_flag:
-            self.move(mouse_event.globalPos() - self.m_Position)
-            mouse_event.accept()
+    def handle_mouse_press(self, event):
+        """处理鼠标按下"""
+        if event.button() == Qt.LeftButton:
+            local_pos = event.pos()
+            global_pos = event.globalPos()
 
-    def mouseReleaseEvent(self, mouse_event):
-        self.m_flag = False
-        self.setCursor(QtGui.QCursor(QtCore.Qt.ArrowCursor))
+            # 1. 检测边框调整
+            edge = self.get_resize_edge(local_pos)
+            if edge:
+                self.resize_edge = edge
+            # 2. 检测标题栏拖动
+            elif local_pos.y() < self.title_height and local_pos.x() < self.width() - 120:
+                self.drag_pos = global_pos - self.frameGeometry().topLeft()
+                self.setCursor(Qt.ClosedHandCursor)
+
+    def handle_mouse_move(self, event):
+        """处理鼠标移动"""
+        local_pos = event.pos()
+        global_pos = event.globalPos()
+
+        # 调整窗口大小
+        if self.resize_edge:
+            geo = self.geometry()
+            if "right" in self.resize_edge:
+                geo.setRight(global_pos.x())
+            if "bottom" in self.resize_edge:
+                geo.setBottom(global_pos.y())
+            self.setGeometry(geo)
+        # 拖动窗口
+        elif self.drag_pos:
+            self.move(global_pos - self.drag_pos)
+        # 光标反馈
+        else:
+            edge = self.get_resize_edge(local_pos)
+            self.setCursor(self.get_edge_cursor(edge))
+
+    def get_resize_edge(self, pos):
+        """检测当前鼠标所在的边缘"""
+        right_edge = pos.x() >= self.width() - self.border_width
+        bottom_edge = pos.y() >= self.height() - self.border_width
+
+        if right_edge and bottom_edge:
+            return "right-bottom"
+        elif right_edge:
+            return "right"
+        elif bottom_edge:
+            return "bottom"
+        return None
+
+    def get_edge_cursor(self, edge):
+        """获取对应边缘的光标"""
+        cursors = {
+            "right": Qt.SizeHorCursor,
+            "bottom": Qt.SizeVerCursor,
+            "right-bottom": Qt.SizeFDiagCursor
+        }
+        return cursors.get(edge, Qt.ArrowCursor)
 
     #收集网络流量数据包
-    # 开始
+    #开始
     def TrafficDataCap_Start(self):
         path = QFileDialog.getExistingDirectory(self, '选择目录')
         data_collection.Start(path, self.ui.textEdit_Log)
@@ -253,8 +335,24 @@ class UI_main_2(QMainWindow):
         except Exception as e:
             self.ui.textEdit_Result.append(f"检测失败: {str(e)}")
 
+    def on_start_clicked(self):
+        response_method = self.ui.comboBox_Method.currentText()
+        email_address = self.ui.textEdit_EmailAddress.text() if response_method == "发送警报邮件" else ""
+        selected_features_path = 'selected_features.txt'
+        response.real_time_monitoring_and_response(selected_features_path, response_method,
+                                          email_address)
+
+    def on_response_method_changed(self, index):
+        response_method = self.ui.comboBox_Method.currentText()
+        if response_method == "发送警报邮件":
+            self.ui.textEdit_EmailAddress.show()
+            self.ui.label_Email.show()
+        else:
+            self.ui.textEdit_EmailAddress.hide()
+            self.ui.label_Email.hide()
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = UI_main_1()
+    window = UI_main_2()
     sys.exit(app.exec_())
