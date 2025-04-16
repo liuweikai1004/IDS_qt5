@@ -14,12 +14,7 @@ from sklearn.model_selection import train_test_split
 
 
 # 1. 数据加载与预处理
-def load_data_csv(path):
-    # 添加CSV格式特有参数
-    data = pd.read_csv(path,
-                       sep=',',  # 分隔符，根据实际数据调整
-                       encoding='utf-8')  # 编码方式，中文数据可尝试 'gbk'
-
+def ToNumber_data(data):
     # 分类特征设置（请根据实际数据字段确认）
     categorical_cols = ['proto', 'service', 'state']  # UNSW-NB15典型分类特征
     label_encoders = {}
@@ -71,20 +66,21 @@ def load_data_csv(path):
     print(data.head(3))
     print("\n特征类型分布:")
     print(data.dtypes.value_counts())
-    print("\n标签分布:")
-    print(data['label'].value_counts(normalize=True))
+    if 'label' in data.columns:
+        print("\n标签分布:")
+        print(data['label'].value_counts(normalize=True))
     print("缺失值统计:")
     print(data.isnull().sum().sort_values(ascending=False).head(5))
     print("=" * 40)
     return data
 
 # 3. 数据预处理主函数
-def preprocess_data(test_path, selected_features, timesteps):
+def preprocess_data(test_data, selected_features, timesteps):
     # 加载数据
     print("加载数据...")
-    data = load_data_csv(test_path)
-
-
+    data = ToNumber_data(test_data)
+    print(data.columns)
+    print(selected_features)
     # 筛选特征并处理
     X = data[selected_features]
 

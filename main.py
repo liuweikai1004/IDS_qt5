@@ -1,12 +1,16 @@
 import sys
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QVBoxLayout
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtCore import Qt  # 核心模块
+from matplotlib import pyplot as plt
 from tensorflow.keras.models import load_model
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 import Login
 import Home
 import data_collection
@@ -126,10 +130,15 @@ class UI_main_2(QMainWindow):
         self.ui.pushButton_loadModel.clicked.connect(self.Load_Model)
         self.ui.pushButton_StartPredict.clicked.connect(self.Run_Detection)
         self.ui.pushButton_MAR_Start.clicked.connect(self.on_start_clicked)
+        self.ui.pushButton_MAR_End.clicked.connect(self.on_end_clicked)
         self.ui.comboBox_Method.currentIndexChanged.connect(self.on_response_method_changed)
 
+        self.show_home_page()
         self.show()
         self.m_flag = False
+        self.monitoring_thread = None
+
+
 
     def show_home_page(self):
         self.ui.label_Welcome.show()
@@ -147,6 +156,7 @@ class UI_main_2(QMainWindow):
         self.ui.label_Email.hide()
         self.ui.label_Method.hide()
         self.ui.comboBox_Method.hide()
+        self.ui.label_MARlog.hide()
 
     def exit(self):
         self.close()
@@ -254,7 +264,8 @@ class UI_main_2(QMainWindow):
             with open("selected_features.txt", "r") as f:
                 selected_feature_names = f.read().splitlines()
             self.ui.textEdit_Result.append(f"已选择文件: {self.csv_path}")
-            self.X_test_res = DataPreprocessing_CNN_LSTM.preprocess_data(self.csv_path, selected_feature_names, 10)
+            test_data = pd.read_csv(self.csv_path, sep=',', encoding='utf-8')
+            self.X_test_res = DataPreprocessing_CNN_LSTM.preprocess_data(test_data, selected_feature_names, 10)
             self.ui.textEdit_Result.append(f"数据已处理完毕！")
         else:
             self.ui.textEdit_Result.append("未选择文件")
@@ -291,15 +302,26 @@ class UI_main_2(QMainWindow):
                 }
                 # 加载模型
                 self.model = load_model(model_path, custom_objects = custom_objects)
-                self.ui.textEdit_Result.append(f"模型已从 {model_path} 加载")
+                if self.ui.textEdit_Result.isVisible():
+                    self.ui.textEdit_Result.append(f"模型已从 {model_path} 加载")
+                else:
+                    QMessageBox.information(self, "提示",
+                                            "模型加载成功！")
             except Exception as e:
-                self.ui.textEdit_Result.append(f"加载模型失败: {str(e)}")
+                if self.ui.textEdit_Result.isVisible():
+                    self.ui.textEdit_Result.append(f"加载模型失败: {str(e)}")
+                else:
+                    QMessageBox.information(self, "提示",
+                                            "模型加载失败！")
         else:
-            self.ui.textEdit_Result.append("未选择模型文件")
+            if self.ui.textEdit_Result.isVisible():
+                self.ui.textEdit_Result.append("未选择模型文件")
+            else:
+                QMessageBox.information(self, "提示",
+                                        "未选择模型文件！")
 
     # 入侵检测
     def Run_Detection(self):
-        print("1111")
         if not self.model:
             self.ui.textEdit_Result.append("请先加载模型")
             return
@@ -336,11 +358,46 @@ class UI_main_2(QMainWindow):
             self.ui.textEdit_Result.append(f"检测失败: {str(e)}")
 
     def on_start_clicked(self):
-        response_method = self.ui.comboBox_Method.currentText()
-        email_address = self.ui.textEdit_EmailAddress.text() if response_method == "发送警报邮件" else ""
-        selected_features_path = 'selected_features.txt'
-        response.real_time_monitoring_and_response(selected_features_path, response_method,
-                                          email_address)
+        """启动监测线程"""
+        if self.monitoring_thread is None or not self.monitoring_thread.isRunning():
+            email = None if self.ui.textEdit_EmailAddress.toPlainText()== "" else self.ui.textEdit_EmailAddress.toPlainText()
+            self.Load_Model()
+            # 创建新线程
+            self.monitoring_thread = response.MonitoringThread(
+                self.model,
+                self.ui.comboBox_Method.currentText(),
+                email
+            )
+
+            # 连接信号
+            self.monitoring_thread.alert_signal.connect(self.show_alert)
+            self.monitoring_thread.action_signal.connect(self.handle_action)
+
+            # 启动线程
+            self.monitoring_thread.start()
+
+            # 更新UI状态
+            self.ui.pushButton_MAR_Start.setEnabled(False)
+            self.ui.pushButton_MAR_End.setEnabled(True)
+            self.ui.label_MARlog.setText("监测已启动...")
+            self.ui.label_MARlog.show()
+
+    def on_end_clicked(self):
+        """停止监测线程"""
+        if self.monitoring_thread and self.monitoring_thread.isRunning():
+            self.monitoring_thread.stop()  # 温和地停止线程
+            self.ui.label_MARlog.setText("正在停止监测...")
+            self.ui.pushButton_MAR_End.setEnabled(False)
+            self.on_thread_finished()
+
+    def on_thread_finished(self):
+        """线程完成时的清理工作"""
+        self.ui.pushButton_MAR_Start.setEnabled(True)
+        self.ui.pushButton_MAR_End.setEnabled(False)
+        self.ui.label_MARlog.setText("监测已停止")
+
+        # 删除线程引用
+        self.monitoring_thread = None
 
     def on_response_method_changed(self, index):
         response_method = self.ui.comboBox_Method.currentText()
@@ -351,6 +408,31 @@ class UI_main_2(QMainWindow):
             self.ui.textEdit_EmailAddress.hide()
             self.ui.label_Email.hide()
 
+    def show_alert(self, title, message, icon_type, needs_response):
+        """显示警报弹窗"""
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(icon_type)
+
+        if needs_response:
+            msg_box.setStandardButtons(QMessageBox.Ok | QMessageBox.Ignore)
+            reply = msg_box.exec_()
+            if self.monitoring_thread:  # 确保线程仍然存在
+                self.monitoring_thread.handle_user_response(reply)
+        else:
+            msg_box.exec_()
+
+
+    def handle_action(self, response_method, email_address, packet_info):
+        """处理需要执行的操作"""
+        if response_method == "发送警报邮件" and email_address:
+            if self.monitoring_thread.send_alert_email(
+                    email_address,
+                    "网络入侵警报",
+                    self.create_alert_message(packet_info)
+            ):
+                self.show_alert("系统提示", f"已发送警报邮件至 {email_address}", QMessageBox.Information, False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
